@@ -27,6 +27,11 @@ Vault admission now processes at most `MAX_ADMISSIONS = 100` deposits per reveal
 This batch size keeps the tested worst-case step below 5 million gas. Keepers should
 continue `reveal` or `revealNext` while pulls remain: a call can make admission progress
 without delivering a portrait yet. Use `revealNext(1)` to work through a large backlog.
+A pull draws only over portraits handed in before the block it was made in, shown by
+`pullBlock(pullId)`; a renewal (`PullRenewed`) moves its entropy block, never that cutoff.
+Portraits handed in during the current block do not count toward a pull made in that block
+(`waitingBefore()` is what `pull` counts); they count from the next block on.
+`setup` requires the liquidity address to be a deployed contract.
 Pending trait rerolls must finish before transfer; metadata exposes `traitRerollBlock`.
 Only `deposit` accepts an NFT in exchange for INK; direct safe transfers to the vault revert.
 

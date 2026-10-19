@@ -36,10 +36,15 @@ contract InkRendererTest is Test {
 
     function _labels(string memory group) internal view returns (string[][6] memory out) {
         string[6] memory keys = ["scene", "palette", "glitch", "density", "depth", "paper"];
-        for (uint256 k; k < 6; k++) out[k] = vm.parseJsonStringArray(json, string.concat(".flat.", group, ".", keys[k]));
+        for (uint256 k; k < 6; k++) {
+            out[k] = vm.parseJsonStringArray(json, string.concat(".flat.", group, ".", keys[k]));
+        }
     }
 
-    function _check(InkRenderer.Labels memory got, string[][6] memory e, uint256 i, string memory what) internal pure {
+    function _check(InkRenderer.Labels memory got, string[][6] memory e, uint256 i, string memory what)
+        internal
+        pure
+    {
         _eq(got.scene, e[0][i], string.concat(what, " scene"));
         _eq(got.palette, e[1][i], string.concat(what, " palette"));
         _eq(got.glitch, e[2][i], string.concat(what, " glitch"));
@@ -70,7 +75,9 @@ contract InkRendererTest is Test {
         string[][6] memory e = _labels("pool");
         assertEq(seeds.length, 500);
         for (uint256 i; i < seeds.length; i++) {
-            _check(renderer.swarmLabels(vm.toString(seeds[i])), e, i, string.concat("pool case ", vm.toString(i)));
+            _check(
+                renderer.swarmLabels(vm.toString(seeds[i])), e, i, string.concat("pool case ", vm.toString(i))
+            );
         }
     }
 
@@ -81,7 +88,9 @@ contract InkRendererTest is Test {
         for (uint256 off; off < art.length; off += chunk) {
             uint256 end = off + chunk > art.length ? art.length : off + chunk;
             bytes memory part = new bytes(end - off);
-            for (uint256 i; i < part.length; i++) part[i] = art[off + i];
+            for (uint256 i; i < part.length; i++) {
+                part[i] = art[off + i];
+            }
             renderer.addChunk(part);
         }
         renderer.lock();
@@ -98,12 +107,16 @@ contract InkRendererTest is Test {
         MockERC20 ink = new MockERC20("INK", "INK", 18);
         ink.mint(address(vault), 2000 * vault.PORTRAIT());
         InkPortraits.AgentStats memory s = InkPortraits.AgentStats(3351, 9859, 10634, 467, false);
-        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(uint256(280), s.accepted, s.rateBps, s.turns, s.hoursTenths, s.outdated))));
+        bytes32 leaf = keccak256(
+            bytes.concat(
+                keccak256(abi.encode(uint256(280), s.accepted, s.rateBps, s.turns, s.hoursTenths, s.outdated))
+            )
+        );
         vm.startPrank(owner);
         portraits.setVault(address(vault));
         portraits.setRenderer(address(renderer));
         vault.setInk(IERC20(address(ink)));
-        vault.setup(leaf, uint64(block.timestamp), address(1)); // a one-leaf tree: the root is the leaf
+        vault.setup(leaf, uint64(block.timestamp), address(this)); // a one-leaf tree: the root is the leaf; any contract stands in for liquidity, never released
         renderer.addChunk("const SwarmArt={render(){}};");
         renderer.setPreviewBase("ipfs://previews/");
         vm.stopPrank();
@@ -124,8 +137,12 @@ contract InkRendererTest is Test {
         _eq(vm.parseJsonString(meta, ".name"), "Agent Portrait #0280", "agent name");
         _eq(vm.parseJsonString(meta, ".portrait_type"), "agent", "agent type");
         _eq(vm.parseJsonString(meta, ".attributes[0].value"), "Agent Portrait", "agent Type trait");
-        assertTrue(vm.contains(vm.parseJsonString(meta, ".description"), "seat #280"), "description names the seat");
-        assertEq(uri, string.concat("data:application/json;base64,", vm.toBase64(meta)), "tokenURI wraps tokenJSON");
+        assertTrue(
+            vm.contains(vm.parseJsonString(meta, ".description"), "seat #280"), "description names the seat"
+        );
+        assertEq(
+            uri, string.concat("data:application/json;base64,", vm.toBase64(meta)), "tokenURI wraps tokenJSON"
+        );
 
         vm.prank(address(vault));
         uint256 first = portraits.mintSwarm(holder, keccak256("first"));
@@ -134,9 +151,14 @@ contract InkRendererTest is Test {
         meta = renderer.tokenJSON(second);
         assertEq(first, portraits.SWARM_ID_OFFSET());
         // Only seat 280 was claimed, so the swarm fills seats 0 and 1 first.
-        _eq(vm.parseJsonString(renderer.tokenJSON(first), ".name"), "Swarm Portrait #0000", "first swarm name");
+        _eq(
+            vm.parseJsonString(renderer.tokenJSON(first), ".name"), "Swarm Portrait #0000", "first swarm name"
+        );
         _eq(vm.parseJsonString(meta, ".name"), "Swarm Portrait #0001", "second swarm name");
-        assertTrue(vm.contains(vm.parseJsonString(meta, ".description"), "unclaimed seat #1,"), "description names the seat it fills");
+        assertTrue(
+            vm.contains(vm.parseJsonString(meta, ".description"), "unclaimed seat #1,"),
+            "description names the seat it fills"
+        );
         _eq(vm.parseJsonString(meta, ".portrait_type"), "swarm", "swarm type");
         _eq(vm.parseJsonString(meta, ".attributes[0].value"), "Swarm Portrait", "swarm Type trait");
     }
@@ -148,7 +170,10 @@ contract InkRendererTest is Test {
         InkPortraits.AgentStats memory s;
         // Claim every seat except 1, 3, 255, 256, 1791, 1792 and 1999.
         for (uint256 seat; seat < 2000; seat++) {
-            if (seat == 1 || seat == 3 || seat == 255 || seat == 256 || seat == 1791 || seat == 1792 || seat == 1999) continue;
+            if (
+                seat == 1 || seat == 3 || seat == 255 || seat == 256 || seat == 1791 || seat == 1792
+                    || seat == 1999
+            ) continue;
             portraits.mintAgent(seat, address(this), s);
         }
         uint256[7] memory expected = [uint256(1), 3, 255, 256, 1791, 1792, 1999];

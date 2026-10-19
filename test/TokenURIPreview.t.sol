@@ -29,7 +29,11 @@ contract TokenURIPreviewTest is Test {
         ink.mint(address(vault), 2000 * vault.PORTRAIT());
 
         InkPortraits.AgentStats memory s = InkPortraits.AgentStats(3351, 9859, 10634, 467, false);
-        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(uint256(280), s.accepted, s.rateBps, s.turns, s.hoursTenths, s.outdated))));
+        bytes32 leaf = keccak256(
+            bytes.concat(
+                keccak256(abi.encode(uint256(280), s.accepted, s.rateBps, s.turns, s.hoursTenths, s.outdated))
+            )
+        );
 
         bytes memory art = new UploadRenderer().artScript();
         uint256 chunk = renderer.MAX_CHUNK();
@@ -37,11 +41,13 @@ contract TokenURIPreviewTest is Test {
         portraits.setVault(address(vault));
         portraits.setRenderer(address(renderer));
         vault.setInk(IERC20(address(ink)));
-        vault.setup(leaf, uint64(block.timestamp), address(1));
+        vault.setup(leaf, uint64(block.timestamp), address(this)); // never released: any contract stands in
         for (uint256 off; off < art.length; off += chunk) {
             uint256 end = off + chunk > art.length ? art.length : off + chunk;
             bytes memory part = new bytes(end - off);
-            for (uint256 i; i < part.length; i++) part[i] = art[off + i];
+            for (uint256 i; i < part.length; i++) {
+                part[i] = art[off + i];
+            }
             renderer.addChunk(part);
         }
         vm.stopPrank();
@@ -64,7 +70,9 @@ contract TokenURIPreviewTest is Test {
         assertGt(bytes(uri).length, 10_000, "tokenURI carries the art");
         try vm.writeFile(path, uri) {}
         catch {
-            emit log_string(string.concat("read-only profile: not written ", path, " (use FOUNDRY_PROFILE=preview)"));
+            emit log_string(string.concat(
+                    "read-only profile: not written ", path, " (use FOUNDRY_PROFILE=preview)"
+                ));
         }
     }
 }

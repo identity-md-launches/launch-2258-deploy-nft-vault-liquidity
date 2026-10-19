@@ -93,6 +93,14 @@ contract InkVault is Ownable, ReentrancyGuard, IERC721Receiver {
     Pull[] public pulls;
     /// @notice The next pull to reveal. Pulls are revealed in order.
     uint256 public nextReveal;
+    /// @dev The block a renewed pull was made in, recorded when its entropy moves to a later block. Renewal
+    /// never moves the admission cutoff: only portraits handed in before the pull was made join its draw.
+    /// Zero while the pull has never been renewed (then pulls[id].blockNumber is that block).
+    mapping(uint256 pullId => uint64) internal _madeBlock;
+    /// @dev How many portraits were handed in during the latest deposit block. They don't count for pulls
+    /// made in that block, since those never admit them.
+    uint64 internal _lastDepositBlock;
+    uint192 internal _depositedInBlock;
     /// @notice The block of a swarm portrait's pending trait reroll; 0 when none is pending.
     mapping(uint256 tokenId => uint64) public traitRerollBlock;
 
@@ -154,7 +162,7 @@ contract InkVault is Ownable, ReentrancyGuard, IERC721Receiver {
         if (address(ink) == address(0)) revert InkNotSet();
         if (statsRoot != bytes32(0)) revert AlreadySetUp();
         if (
-            root == bytes32(0) || liquidity_ == address(0) || start < block.timestamp
+            root == bytes32(0) || liquidity_.code.length == 0 || start < block.timestamp
                 || start > block.timestamp + MAX_START_DELAY
         ) revert BadSetup();
         if (ink.balanceOf(address(this)) < SEATS * PORTRAIT) revert NotFunded();
@@ -230,15 +238,14 @@ contract InkVault is Ownable, ReentrancyGuard, IERC721Receiver {
     }
 
     /// @notice Locks 400,000 INK per pull and queues that many random portraits. Opens at release, and only
-    /// while there are enough portraits (unminted slots, the vault's inventory and ones waiting to join it) for
-    /// every queued pull.
+    /// while there are enough portraits (unminted slots, the vault's inventory and ones handed in before this
+    /// block that are waiting to join it) for every queued pull.
     function pull(uint256 count) external nonReentrant returns (uint256 firstPullId) {
         if (!released) revert NotReleased();
         if (count == 0) revert ZeroPulls();
         // Every queued pull must have a portrait to land on, so no INK waits on a pull that can't be filled.
-        if (pulls.length - nextReveal + count > available() + _incoming.length - _incomingHead) {
-            revert NoneAvailable();
-        }
+        // Portraits handed in this block never join a pull made now, so they don't count for it.
+        if (pulls.length - nextReveal + count > available() + waitingBefore()) revert NoneAvailable();
         ink.safeTransferFrom(msg.sender, address(this), count * PORTRAIT);
         firstPullId = pulls.length;
         for (uint256 i; i < count; i++) {
@@ -250,7 +257,8 @@ contract InkVault is Ownable, ReentrancyGuard, IERC721Receiver {
     /// @notice Reveals every pull up to and including `pullId`, in order. Anyone can call it; each portrait
     /// goes to its puller (without the ERC-721 receiver check, so a contract puller can't veto its draw).
     /// Stops early, keeping what it did, when a pull has to be renewed: its block hash is older than 256
-    /// blocks, or no portrait is free. A renewed pull is drawn from a later block.
+    /// blocks, or no portrait is free. A renewed pull is drawn from a later block hash, over the same candidates:
+    /// renewal never lets a later hand-in join its draw, or the draw of any pull queued behind it.
     /// Also stops after a bounded admission batch if more eligible deposits remain. Call again to finish;
     /// no draw occurs until all deposits eligible for that pull have joined, preserving its candidate set.
     /// @return done Whether `pullId` itself was revealed.
@@ -284,14 +292,20 @@ contract InkVault is Ownable, ReentrancyGuard, IERC721Receiver {
         Pull storage p = pulls[pullId];
         if (block.number <= uint256(p.blockNumber) + 1) return Step.TooEarly;
 
-        // Portraits handed in before this pull's block join the draw; later ones wait for later pulls.
-        if (!_admit(p.blockNumber)) {
+        // Portraits handed in before the pull was made join the draw; later ones wait for later pulls. A
+        // renewal moves only the entropy block: the cutoff stays, so the pulls queued behind this one, whose
+        // block hashes may already be public, never see portraits handed in after their own blocks.
+        uint64 made = _madeBlock[pullId];
+        if (made == 0) made = p.blockNumber;
+        if (!_admit(made)) {
             emit AdmissionProgress(pullId, MAX_ADMISSIONS);
             return Step.Admitting;
         }
         bytes32 entropy = blockhash(uint256(p.blockNumber) + 1);
         uint256 avail = available();
+        // avail is never 0 here: pull() only counts portraits that this cutoff admits, and each reveal takes one.
         if (entropy == bytes32(0) || avail == 0) {
+            if (_madeBlock[pullId] == 0) _madeBlock[pullId] = made;
             p.blockNumber = uint64(block.number);
             emit PullRenewed(pullId, p.blockNumber);
             return Step.Renewed;
@@ -342,6 +356,12 @@ contract InkVault is Ownable, ReentrancyGuard, IERC721Receiver {
     {
         // Read before the transfers: handing in your only agent portrait still counts for the discount.
         bool agentHolder = portraits.isAgentHolder(msg.sender);
+        if (_lastDepositBlock == uint64(block.number)) {
+            _depositedInBlock += uint192(tokenIds.length);
+        } else {
+            _lastDepositBlock = uint64(block.number);
+            _depositedInBlock = uint192(tokenIds.length);
+        }
         uint256 fees;
         for (uint256 i; i < tokenIds.length; i++) {
             uint256 tokenId = tokenIds[i];
@@ -412,8 +432,23 @@ contract InkVault is Ownable, ReentrancyGuard, IERC721Receiver {
     }
 
     /// @notice Portraits handed in that join the draw for pulls made after their block.
-    function waitingCount() external view returns (uint256) {
+    function waitingCount() public view returns (uint256) {
         return _incoming.length - _incomingHead;
+    }
+
+    /// @notice Portraits handed in before this block that are still waiting to join the draw. A pull made now
+    /// can land on them; ones handed in this block only count for pulls made from the next block on.
+    function waitingBefore() public view returns (uint256) {
+        uint256 waiting = waitingCount();
+        return _lastDepositBlock == uint64(block.number) ? waiting - _depositedInBlock : waiting;
+    }
+
+    /// @notice The block a pull was made in: only portraits handed in before it join that pull's draw. A
+    /// renewal (PullRenewed) moves the pull's entropy block, the one pulls() shows, but never this one.
+    function pullBlock(uint256 pullId) external view returns (uint64) {
+        if (pullId >= pulls.length) revert UnknownPull();
+        uint64 made = _madeBlock[pullId];
+        return made != 0 ? made : pulls[pullId].blockNumber;
     }
 
     function inventoryAt(uint256 index) external view returns (uint256) {

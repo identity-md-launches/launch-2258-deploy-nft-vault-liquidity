@@ -88,6 +88,48 @@ succeeded. The same scenarios pass after the fixes.
    `test/VaultInvariants.t.sol` now expects the specific rejection during random transfers
    of pending portraits, while continuing to exercise all transfers and custody invariants.
 
+## Revision after independent review
+
+5. **`4ca4934502312899d527ecc3976657e896312bb0ede15889d04d0fa3d7b44a1a` — reproduced and fixed.**
+   The reviewer's proof failed on the accepted tree exactly as reported: renewing the head
+   pull passed the renewed block to `_admit`, so hand-ins made after a queued pull's block
+   (whose hash was already public) joined that pull's draw. `src/InkVault.sol` now keeps each
+   pull's admission cutoff at the block it was made in. A renewal records that block in
+   `_madeBlock` before moving `pulls(id).blockNumber` to the new entropy block, and
+   `_revealNext` admits against the recorded block, so a renewal changes only which hash is
+   used, never which hand-ins any pull can draw. `pullBlock(pullId)` exposes the cutoff.
+   Because the cutoff can no longer move, a pull that counted a hand-in from its own block
+   would have had nothing to draw and could never be revealed, so `pull` no longer counts
+   same-block hand-ins toward capacity: `deposit` tracks how many portraits arrived in the
+   latest block and `waitingBefore()` excludes them. The documented draw rule, entropy,
+   selection, batching and fees are unchanged. Tests in `test/AuditRegression.t.sol`:
+   the review scenario with `pullBlock` assertions and a later pull admitting the hand-ins,
+   repeated renewals of a head pull with a pull queued behind it, and the same-block rule
+   with a full collection. `test/VaultInvariants.t.sol` computes capacity with
+   `waitingBefore()` and its queue-coverage invariant uses it too.
+
+6. **`71ef9819c72d045dfef2e8dd14e0af4fe72adb1ce9ec817266d1b831060adac2` — partly addressed, rest disputed.**
+   `setup` now rejects a liquidity address with no code (`BadSetup`), closing the reviewer's
+   first case while the owner can still correct it; three test fixtures that passed the
+   ecrecover precompile as a never-called liquidity stand-in now pass a contract.
+   The other suggested checks were not added: a `poolSet()`/`ink()` cross-check would
+   fail against any liquidity stand-in that only implements `addLiquidity()`, including
+   the reviewer's own proof fixture, and neither `setInk` nor `setVault` can tell a wrong
+   token or vault from a right one without a reference value this brief does not give.
+   These remain owner input steps, listed under owner operations below.
+
+7. **`eb210c01817daae4677b0f95f5fabee133c8f58fe59d5985cd661fecab9e8b75` — disputed for this launch.**
+   The hook is not among the five contracts this launch deploys, as the finding itself
+   records, and its constructor belongs to the later hook launch. No hook logic was changed.
+
+8. **`9d091aababb8d0168e29a19cb61c05d6018e226dd9b0f58d089b8a7432f6a7e6` — disputed, by design.**
+   Permissionless `TestSeats.mint` is what the brief orders for Sepolia and the file says
+   so. Nothing was changed; the rehearsal should mint or scope the seats its root covers.
+
+9. **`6b9482702b6ed254526e7e84650286a2741129924fc6d661241e2f7ea5adb0f3` — fixed.**
+   `forge fmt src/InkHook.sol` rewrapped the three signatures; `forge fmt --check src`
+   now passes. No logic changed.
+
 ## Other imported audit entries
 
 - **`770ef424206b5b98daf7099cb0779774d2947d7f4ad1f7271ea3c3f7f35ab73b` — setup dependency confirmed; intentionally retained.**
@@ -142,7 +184,11 @@ Preserve the project's existing sequence. Only the designated owner performs its
 5. After the window, anyone can call `release`. Keepers continue `reveal`/`revealNext`
    while pulls remain pending, even when a call only admits deposits. Watch `PullRenewed`
    for a new entropy wait and `AdmissionProgress` for work that can continue immediately.
+   A renewed pull keeps its candidates (`pullBlock`); hand-ins from the current block count
+   for pulls from the next block on (`waitingBefore`).
    Use `deposit` for NFT refunds and finish pending trait rerolls before transferring.
+   `setInk`, `setVault` and `setPool` are still one-shot and unchecked beyond what is
+   described above: verify each value before sending.
 
 ## File inventory and validation
 
@@ -165,9 +211,11 @@ Final checks:
 
 - `forge build`: passed, Solidity 0.8.26, unchanged default profile.
 - `forge build --sizes`: passed. Runtime sizes are TestSeats **3,814**, InkPortraits
-  **8,078**, InkVault **10,617**, InkLiquidity **9,724**, and InkRenderer **12,721** bytes,
+  **8,078**, InkVault **11,120**, InkLiquidity **9,724**, and InkRenderer **12,721** bytes,
   each below 24,576. Constructor arguments also fit the init-code limit.
-- `forge test` with the seed above: **71 passed, 0 failed, 28 skipped**, across 15 suites.
+- `forge test` with the seed above: **75 passed, 0 failed, 28 skipped**, across 15 suites.
+  The reviewer's proof for `4ca49345…`, run from a copy under `test/scratch/`, failed on
+  the accepted tree and passes on this one.
   This includes 256 admission fuzz cases and the seven vault invariants over 64 runs /
   7,680 handler calls, with zero unexpected reverts. The skipped cases are the existing
   optional fork/snapshot/fee-handoff tests requiring additional external inputs.

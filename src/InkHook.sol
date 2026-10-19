@@ -115,7 +115,11 @@ contract InkHook is IHooks, IUnlockCallback {
     // ---------------------------------------------------------------- hooks
 
     /// @dev One pool only: INK paired with IMD, with this hook. The launch window starts here.
-    function beforeInitialize(address, PoolKey calldata key, uint160) external onlyPoolManager returns (bytes4) {
+    function beforeInitialize(address, PoolKey calldata key, uint160)
+        external
+        onlyPoolManager
+        returns (bytes4)
+    {
         if (poolCreated) revert PoolAlreadyCreated();
         if (address(key.hooks) != address(this)) revert WrongPool();
         if (key.currency0 == imd) ink = key.currency1;
@@ -145,11 +149,13 @@ contract InkHook is IHooks, IUnlockCallback {
         return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
-    function afterSwap(address, PoolKey calldata key, SwapParams calldata params, BalanceDelta delta, bytes calldata)
-        external
-        onlyPoolManager
-        returns (bytes4, int128)
-    {
+    function afterSwap(
+        address,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        bytes calldata
+    ) external onlyPoolManager returns (bytes4, int128) {
         address swapper = tx.origin;
 
         if (feeBps == 0 || portraits.isAgentHolder(swapper)) return (IHooks.afterSwap.selector, 0);
@@ -239,7 +245,11 @@ contract InkHook is IHooks, IUnlockCallback {
         revert HookNotImplemented();
     }
 
-    function afterDonate(address, PoolKey calldata, uint256, uint256, bytes calldata) external pure returns (bytes4) {
+    function afterDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
+        external
+        pure
+        returns (bytes4)
+    {
         revert HookNotImplemented();
     }
 }

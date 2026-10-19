@@ -33,11 +33,15 @@ contract SnapshotProofsTest is Test {
         vm.startPrank(owner);
         portraits.setVault(address(vault));
         vault.setInk(IERC20(address(ink)));
-        vault.setup(vm.parseJsonBytes32(json, ".root"), uint64(block.timestamp), address(1));
+        vault.setup(vm.parseJsonBytes32(json, ".root"), uint64(block.timestamp), address(this)); // never released
         vm.stopPrank();
     }
 
-    function _entry(uint256 i) internal view returns (uint256 seat, InkPortraits.AgentStats memory s, bytes32[] memory proof) {
+    function _entry(uint256 i)
+        internal
+        view
+        returns (uint256 seat, InkPortraits.AgentStats memory s, bytes32[] memory proof)
+    {
         string memory p = string.concat(".entries[", vm.toString(i), "]");
         seat = vm.parseJsonUint(json, string.concat(p, ".seat"));
         s = InkPortraits.AgentStats({

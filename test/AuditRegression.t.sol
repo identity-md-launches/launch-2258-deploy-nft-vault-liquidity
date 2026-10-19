@@ -233,6 +233,138 @@ contract AuditRegressionTest is Test {
         assertEq(portraits.balanceOf(buyer), 1);
     }
 
+    /// Review 4ca49345: renewing the head pull must not admit hand-ins made after a queued pull's block into
+    /// that pull's draw, since its block hash is already public.
+    function test_renewedHeadPullNeverWidensALaterPullsDraw() public {
+        _mintPortraits(2);
+        vm.roll(1000);
+        uint256 pullA = _pull(alice, 1);
+        vm.roll(1003);
+        uint256 pullB = _pull(buyer, 1);
+        vm.roll(1010);
+        assertTrue(blockhash(1004) != bytes32(0), "pull B's entropy is public");
+        _depositRange(0, 2);
+        assertEq(vault.waitingCount(), 2);
+
+        vm.roll(1258);
+        assertEq(blockhash(1001), bytes32(0), "pull A's hash expired");
+        assertFalse(vault.reveal(pullA));
+        (, uint64 entropyBlock,) = vault.pulls(pullA);
+        assertEq(entropyBlock, 1258, "renewal moves the entropy block");
+        assertEq(vault.pullBlock(pullA), 1000, "renewal keeps the admission cutoff");
+        assertEq(vault.waitingCount(), 2, "renewal admits nothing");
+
+        vm.roll(1260);
+        assertTrue(vault.reveal(pullB));
+        (, uint64 bBlock, bool bDone) = vault.pulls(pullB);
+        assertTrue(bDone);
+        assertEq(bBlock, 1003);
+        assertEq(vault.pullBlock(pullB), 1003);
+        assertEq(vault.waitingCount(), 2, "hand-ins after both pulls' blocks stay out of their draws");
+        assertEq(vault.inventorySize(), 0);
+        assertEq(portraits.balanceOf(alice), 1);
+        assertEq(portraits.balanceOf(buyer), 1);
+
+        // A pull made after the hand-ins admits them, as documented.
+        uint256 pullC = _pull(buyer, 1);
+        assertEq(vault.pullBlock(pullC), 1260);
+        _mature();
+        assertTrue(vault.reveal(pullC));
+        assertEq(vault.waitingCount(), 0, "the draw covered both hand-ins");
+        assertEq(vault.inventorySize(), vault.heldCount());
+        assertEq(portraits.balanceOf(buyer), 2);
+        vm.expectRevert(InkVault.UnknownPull.selector);
+        vault.pullBlock(pullC + 1);
+    }
+
+    /// Review 4ca49345: a renewed pull draws from a later hash over its original candidates; a pull queued
+    /// behind it admits only hand-ins made before its own block, even across repeated renewals.
+    function test_renewalsKeepEachPullsOwnCutoff() public {
+        _mintPortraits(1);
+        vm.roll(1000);
+        uint256 pullA = _pull(buyer, 1);
+        vm.roll(1005);
+        _depositRange(0, 1);
+        vm.roll(1010);
+        uint256 pullB = _pull(buyer, 1);
+        vm.roll(1300);
+        assertEq(vault.revealNext(1), 0, "expired: renewed");
+        vm.roll(1600);
+        assertEq(vault.revealNext(1), 0, "expired again: renewed again");
+        assertEq(vault.pullBlock(pullA), 1000);
+        (, uint64 entropyBlock, bool done) = vault.pulls(pullA);
+        assertEq(entropyBlock, 1600);
+        assertFalse(done);
+        assertEq(vault.waitingCount(), 1, "the block-1005 hand-in never joins pull A");
+        _mature();
+        assertEq(vault.revealNext(1), 1);
+        assertEq(vault.waitingCount(), 1, "pull A drew without it");
+        assertEq(vault.inventorySize(), 0);
+        assertEq(vault.revealNext(1), 0, "pull B's hash (block 1011) expired too: renewed");
+        assertEq(vault.waitingCount(), 0, "pull B, made at block 1010, admitted it before renewing");
+        assertEq(vault.inventorySize(), 1);
+        assertEq(vault.pullBlock(pullB), 1010);
+        (, entropyBlock, done) = vault.pulls(pullB);
+        assertEq(entropyBlock, block.number);
+        assertFalse(done);
+        _mature();
+        assertEq(vault.revealNext(1), 1);
+        assertEq(vault.nextReveal(), pullB + 1);
+        assertEq(portraits.balanceOf(buyer), 2);
+        assertEq(vault.inventorySize() + vault.waitingCount(), vault.heldCount());
+    }
+
+    /// Review 4ca49345: a pull can't count hand-ins from its own block, since its fixed cutoff never admits
+    /// them; otherwise, with everything else drawn, it could never be revealed.
+    function test_sameBlockHandInsDoNotCountForPullsMadeNow() public {
+        _mintPortraits(2000);
+        assertEq(vault.available(), 0);
+        vm.roll(block.number + 1);
+        _depositRange(0, 1);
+        assertEq(vault.waitingCount(), 1);
+        assertEq(vault.waitingBefore(), 0, "handed in this block");
+        ink.mint(buyer, 2 * PORTRAIT);
+        vm.startPrank(buyer);
+        ink.approve(address(vault), 2 * PORTRAIT);
+        vm.expectRevert(InkVault.NoneAvailable.selector);
+        vault.pull(1);
+        vm.stopPrank();
+
+        vm.roll(block.number + 1);
+        assertEq(vault.waitingBefore(), 1, "counts from the next block on");
+        _depositRange(1, 1);
+        assertEq(vault.waitingCount(), 2);
+        assertEq(vault.waitingBefore(), 1);
+        vm.startPrank(buyer);
+        vm.expectRevert(InkVault.NoneAvailable.selector);
+        vault.pull(2);
+        uint256 first = vault.pull(1);
+        vm.stopPrank();
+        _mature();
+        assertTrue(vault.reveal(first), "the pull it counted is admitted and drawn, never renewed");
+        assertEq(portraits.ownerOf(10_000), buyer);
+        assertEq(vault.waitingCount(), 1);
+        assertEq(vault.waitingBefore(), 1);
+        assertEq(vault.inventorySize(), 0);
+    }
+
+    /// Review 71ef9819: setup() is the one-shot that release() depends on, so a liquidity address without
+    /// code is rejected while the owner can still correct it.
+    function test_setupRejectsLiquidityWithoutCode() public {
+        InkVault fresh = new InkVault(portraits, seats, owner);
+        ink.mint(address(fresh), 2000 * PORTRAIT);
+        vm.startPrank(owner);
+        fresh.setInk(IERC20(address(ink)));
+        vm.expectRevert(InkVault.BadSetup.selector);
+        fresh.setup(keccak256("root"), uint64(block.timestamp), makeAddr("not a contract"));
+        vm.expectRevert(InkVault.BadSetup.selector);
+        fresh.setup(keccak256("root"), uint64(block.timestamp), address(0));
+        assertEq(fresh.statsRoot(), bytes32(0), "still correctable");
+        fresh.setup(keccak256("root"), uint64(block.timestamp), address(sink));
+        vm.stopPrank();
+        assertEq(fresh.liquidity(), address(sink));
+    }
+
     function testFuzz_admissionCompletesWithBothRevealEntryPoints(uint16 rawCount, bool useRevealNext)
         public
     {

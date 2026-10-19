@@ -167,7 +167,7 @@ contract VaultHandler is Test {
 
     function pull(uint256 actorSeed, uint256 count) external counted("pull") {
         if (!vault.released()) return;
-        uint256 room = vault.available() + vault.waitingCount() - (vault.pullCount() - vault.nextReveal());
+        uint256 room = vault.available() + vault.waitingBefore() - (vault.pullCount() - vault.nextReveal());
         if (room == 0) return;
         count = bound(count, 1, room < 60 ? room : 60);
         address who = _actor(actorSeed);
@@ -179,7 +179,7 @@ contract VaultHandler is Test {
     /// Pulls everything that's left (up to 500), to drive the collection to its 2,000 cap.
     function pullAll(uint256 actorSeed) external counted("pullAll") {
         if (!vault.released()) return;
-        uint256 room = vault.available() + vault.waitingCount() - (vault.pullCount() - vault.nextReveal());
+        uint256 room = vault.available() + vault.waitingBefore() - (vault.pullCount() - vault.nextReveal());
         if (room == 0) return;
         if (room > 500) room = 500;
         address who = _actor(actorSeed);
@@ -191,7 +191,7 @@ contract VaultHandler is Test {
 
     function pullTooMany(uint256 actorSeed) external counted("pullTooMany") {
         if (!vault.released()) return;
-        uint256 room = vault.available() + vault.waitingCount() - (vault.pullCount() - vault.nextReveal());
+        uint256 room = vault.available() + vault.waitingBefore() - (vault.pullCount() - vault.nextReveal());
         address who = _actor(actorSeed);
         _fund(who, (room + 1) * PORTRAIT);
         vm.prank(who);
@@ -361,7 +361,9 @@ contract VaultInvariantsTest is Test {
     /// Every queued pull has a portrait waiting for it, so no pull can be stuck for want of one.
     function invariant_queueCovered() public view {
         uint256 queued = vault.pullCount() - vault.nextReveal();
-        assertLe(queued, vault.available() + vault.waitingCount());
+        // Audit 4ca49345: hand-ins from this block never count, so a fixed admission cutoff always has a portrait.
+        assertLe(queued, vault.available() + vault.waitingBefore());
+        assertLe(vault.waitingBefore(), vault.waitingCount());
         if (vault.nextReveal() > 0) {
             (,, bool done) = vault.pulls(vault.nextReveal() - 1);
             assertTrue(done);
