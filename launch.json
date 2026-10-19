@@ -1,0 +1,31 @@
+{
+  "kind": "evm_contracts",
+  "contracts": [
+    {
+      "contract": "TestSeats",
+      "constructorArgs": []
+    },
+    {
+      "contract": "InkPortraits",
+      "constructorArgs": ["$owner"]
+    },
+    {
+      "contract": "InkVault",
+      "constructorArgs": ["$contract:InkPortraits", "$contract:TestSeats", "$owner"]
+    },
+    {
+      "contract": "InkLiquidity",
+      "constructorArgs": [
+        "0xE03A1074c86CFeDd5C142C4F04F1a1536e203543",
+        "0x429ba70129df741B2Ca2a85BC3A2a3328e5c09b4",
+        "$owner",
+        "0xbc10b3662231c830d2ee10bc6359db17bea4b3d4"
+      ]
+    },
+    {
+      "contract": "InkRenderer",
+      "constructorArgs": ["$contract:InkPortraits", "$owner"]
+    }
+  ],
+  "notes": "Sepolia (11155111): deploy TestSeats, InkPortraits, InkVault, InkLiquidity and InkRenderer in this order. InkLiquidity uses the official Uniswap v4 PoolManager and PositionManager listed at https://developers.uniswap.org/docs/protocols/v4/deployments. All application ownership arguments and the InkPortraits royalty recipient resolve to $owner; the existing royalty rate is 0%. The treasury 0xbc10b3662231c830d2ee10bc6359db17bea4b3d4 receives IMD-side liquidity fees and has no owner or admin role."
+}
