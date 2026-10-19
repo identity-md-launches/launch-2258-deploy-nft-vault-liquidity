@@ -42,6 +42,8 @@ contract VaultHandler is Test {
     /// INK the vault has sent to the liquidity contract in fees, by the handler's own count.
     uint256 public feesToLiquidity;
     uint256 public inkMinted;
+    /// Unsolicited INK is surplus, never another portrait or a right to withdraw.
+    uint256 public donatedInk;
     uint256 public calls;
     bool public soldOutReached;
     mapping(bytes32 => uint256) public callCount;
@@ -223,7 +225,7 @@ contract VaultHandler is Test {
     }
 
     function deposit(uint256 actorSeed, uint256 pick) external counted("deposit") {
-        if (!vault.released()) return;
+        // Agent owners may redeem during the claim window too. Exercise that reachable state.
         address who = _actor(actorSeed);
         uint256 id = _heldBy(who, pick);
         if (id == type(uint256).max || vault.traitRerollBlock(id) != 0) return;
@@ -287,12 +289,23 @@ contract VaultHandler is Test {
         vault.setFees(base, agent);
     }
 
+    function donate(uint256 actorSeed, uint256 amount) external counted("donate") {
+        amount = bound(amount, 0, 10 * PORTRAIT);
+        address who = _actor(actorSeed);
+        _fund(who, amount);
+        vm.prank(who);
+        ink.transfer(address(vault), amount);
+        donatedInk += amount;
+    }
+
     function actorCount() external view returns (uint256) {
         return actors.length;
     }
 }
 
 /// Invariants that must hold after any sequence of claims, releases, pulls, reveals, hand-ins and transfers.
+/// forge-config: default.invariant.runs = 256
+/// forge-config: default.invariant.depth = 120
 contract VaultInvariantsTest is Test {
     uint256 constant PORTRAIT = 400_000e18;
 
@@ -325,16 +338,20 @@ contract VaultInvariantsTest is Test {
         targetContract(address(handler));
     }
 
-    /// Every portrait outside the vault, and every queued pull, is backed by 400,000 INK; the pot is extra.
+    /// Claims reserve backing; early agent redemptions release it. Donations are always extra collateral.
     function invariant_fullyBacked() public view {
         uint256 bal = ink.balanceOf(address(vault));
         if (!vault.released()) {
-            assertEq(bal, 2000 * PORTRAIT, "before release the vault holds every seat's INK");
+            assertEq(
+                bal,
+                (2000 - vault.heldCount()) * PORTRAIT + handler.donatedInk(),
+                "before release, backing excludes redeemed agents and includes unclaimed seats"
+            );
             return;
         }
         uint256 outside = portraits.totalSupply() - vault.heldCount();
         uint256 queued = vault.pullCount() - vault.nextReveal();
-        assertEq(bal, (outside + queued) * PORTRAIT, "backing");
+        assertEq(bal, (outside + queued) * PORTRAIT + handler.donatedInk(), "backing plus donations");
     }
 
     /// No INK appears or disappears: vault + liquidity + actors + burned = what was minted.
@@ -388,6 +405,28 @@ contract VaultInvariantsTest is Test {
         }
         sum += portraits.agentBalanceOf(address(vault));
         assertEq(sum, portraits.agentMinted());
+    }
+
+    function test_donationRemainsSurplusThroughEarlyRedemptionReleaseAndPull() public {
+        handler.claim(0);
+        handler.donate(2, PORTRAIT + 1);
+        handler.deposit(0, 0);
+        assertEq(vault.heldCount(), 1, "an agent was redeemed while claims were still open");
+        assertEq(handler.donatedInk(), PORTRAIT + 1);
+        invariant_fullyBacked();
+        invariant_inkConserved();
+        handler.release(0);
+        assertEq(ink.balanceOf(address(vault)), PORTRAIT + 1, "donation is not released as unclaimed backing");
+        handler.pull(3, 1);
+        uint256 entropyBlock = block.number + 1;
+        vm.roll(block.number + 2);
+        vm.setBlockhash(entropyBlock, keccak256("donation lifecycle witness"));
+        handler.reveal(0);
+        assertEq(vault.nextReveal(), 1, "the lifecycle reached a successful reveal");
+        invariant_fullyBacked();
+        invariant_inkConserved();
+        invariant_custody();
+        invariant_feesToLiquidity();
     }
 
     function afterInvariant() external view {
