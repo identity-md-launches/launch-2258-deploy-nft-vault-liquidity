@@ -133,6 +133,19 @@ contract VaultHandler is Test {
         return type(uint256).max;
     }
 
+    /// Ghost: the block each pull was made in, recorded when it was queued.
+    uint64[] public madeAt;
+
+    function madeCount() external view returns (uint256) {
+        return madeAt.length;
+    }
+
+    function _recordPulls(uint256 count) internal {
+        for (uint256 i; i < count; i++) {
+            madeAt.push(uint64(block.number));
+        }
+    }
+
     modifier counted(bytes32 name) {
         calls++;
         callCount[name]++;
@@ -176,6 +189,7 @@ contract VaultHandler is Test {
         _fund(who, count * PORTRAIT);
         vm.prank(who);
         vault.pull(count);
+        _recordPulls(count);
     }
 
     /// Pulls everything that's left (up to 500), to drive the collection to its 2,000 cap.
@@ -188,6 +202,7 @@ contract VaultHandler is Test {
         _fund(who, room * PORTRAIT);
         vm.prank(who);
         vault.pull(room);
+        _recordPulls(room);
         if (portraits.totalSupply() + vault.pullCount() - vault.nextReveal() >= 2000) soldOutReached = true;
     }
 
@@ -388,6 +403,23 @@ contract VaultInvariantsTest is Test {
         if (queued > 0) {
             (,, bool done) = vault.pulls(vault.nextReveal());
             assertFalse(done);
+        }
+    }
+
+    /// A pull's admission cutoff is the block it was made in and never moves, however often it is renewed;
+    /// renewal moves only its entropy block, which is never earlier than the cutoff.
+    function invariant_pullCutoffFixed() public view {
+        assertEq(handler.madeCount(), vault.pullCount(), "ghost tracks every pull");
+        uint256 head = vault.nextReveal();
+        uint256 first = head > 0 ? head - 1 : 0;
+        uint256 last = vault.pullCount();
+        // Only queued pulls can be renewed; the head of the queue and the last revealed one bound the window.
+        if (last > first + 64) last = first + 64;
+        for (uint256 id = first; id < last; id++) {
+            uint64 made = handler.madeAt(id);
+            assertEq(vault.pullBlock(id), made, "cutoff moved");
+            (, uint64 entropyBlock,) = vault.pulls(id);
+            assertGe(entropyBlock, made, "entropy block before the cutoff");
         }
     }
 
