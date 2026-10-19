@@ -61,7 +61,9 @@ contract VaultHandler is Test {
             portraits.setApprovalForAll(address(vault), true);
         }
         for (uint256 s; s < SEATS_IN_TREE; s++) {
-            stats[s] = InkPortraits.AgentStats(uint32(s * 37), uint16(5000 + s * 500), uint32(s * 900), uint32(s * 11), s % 3 == 0);
+            stats[s] = InkPortraits.AgentStats(
+                uint32(s * 37), uint16(5000 + s * 500), uint32(s * 900), uint32(s * 11), s % 3 == 0
+            );
             leaves[s] = _leaf(s, stats[s]);
             seats.mint(actors[s % actors.length], s);
         }
@@ -76,7 +78,9 @@ contract VaultHandler is Test {
 
     function _leaf(uint256 seat, InkPortraits.AgentStats memory s) internal pure returns (bytes32) {
         return keccak256(
-            bytes.concat(keccak256(abi.encode(seat, s.accepted, s.rateBps, s.turns, s.hoursTenths, s.outdated)))
+            bytes.concat(
+                keccak256(abi.encode(seat, s.accepted, s.rateBps, s.turns, s.hoursTenths, s.outdated))
+            )
         );
     }
 
@@ -269,7 +273,10 @@ contract VaultHandler is Test {
         address from = _actor(fromSeed);
         uint256 id = _heldBy(from, pick);
         if (id == type(uint256).max) return;
+        bool pending = vault.traitRerollBlock(id) != 0;
         vm.prank(from);
+        // Audit 5574e8bc: the holder's pending repaint prevents selling stale traits.
+        if (pending) vm.expectRevert(InkPortraits.RerollPending.selector);
         portraits.transferFrom(from, _actor(toSeed), id);
     }
 
@@ -341,7 +348,9 @@ contract VaultInvariantsTest is Test {
 
     function invariant_capAndSlots() public view {
         assertLe(portraits.totalSupply(), 2000);
-        assertLe(portraits.swarmMinted(), vault.swarmSlots(), "never more swarm portraits than unclaimed seats");
+        assertLe(
+            portraits.swarmMinted(), vault.swarmSlots(), "never more swarm portraits than unclaimed seats"
+        );
         if (vault.released()) assertEq(portraits.agentMinted() + vault.swarmSlots(), 2000);
     }
 

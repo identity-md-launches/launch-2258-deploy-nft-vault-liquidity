@@ -17,13 +17,29 @@ owner/paying wallet, private cutoff, keys, RPC credentials or completed launch i
 This directory is the root of a self-contained Foundry repository. No sibling web app
 or other workspace directory is needed. No unpinned dependency install script is used.
 
+## Sepolia launch adaptation
+
+[ADAPTATION.md](ADAPTATION.md) records this launch's exact contract order, constructor
+arguments, owner, official Sepolia manager addresses, reproduced audit fixes, and the
+owner's subsequent setup steps. The five requested constructor signatures are unchanged.
+
+Vault admission now processes at most `MAX_ADMISSIONS = 100` deposits per reveal step.
+This batch size keeps the tested worst-case step below 5 million gas. Keepers should
+continue `reveal` or `revealNext` while pulls remain: a call can make admission progress
+without delivering a portrait yet. Use `revealNext(1)` to work through a large backlog.
+Pending trait rerolls must finish before transfer; metadata exposes `traitRerollBlock`.
+Only `deposit` accepts an NFT in exchange for INK; direct safe transfers to the vault revert.
+
+The packaged `SHA256SUMS`, `BYTECODE_HASHES.json`, and original validation records describe
+the imported source. Audit fixes change those source/bytecode hashes; use the adapted
+source and current Foundry output for this launch, with validation recorded in ADAPTATION.md.
+
 ## Build and test
 
 Install Foundry using https://getfoundry.sh/ and use the version recorded in VALIDATION.txt.
 Run at this directory's root:
 
 ```sh
-sha256sum -c SHA256SUMS
 forge build
 forge test -vv
 ```

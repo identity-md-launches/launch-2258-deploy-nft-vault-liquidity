@@ -72,6 +72,7 @@ contract InkLiquidity is Ownable, IERC721Receiver {
 
     error PoolAlreadySet();
     error PoolNotSet();
+    error PoolNotInitialized();
     error NotInkPool();
     error NothingToAdd();
     error BelowMinAdd();
@@ -80,9 +81,12 @@ contract InkLiquidity is Ownable, IERC721Receiver {
     error NothingToCollect();
     error ZeroTreasury();
 
-    constructor(IPoolManager poolManager_, IPositionManager positionManager_, address owner_, address treasury_)
-        Ownable(owner_)
-    {
+    constructor(
+        IPoolManager poolManager_,
+        IPositionManager positionManager_,
+        address owner_,
+        address treasury_
+    ) Ownable(owner_) {
         if (treasury_ == address(0)) revert ZeroTreasury();
         poolManager = poolManager_;
         positionManager = positionManager_;
@@ -94,10 +98,12 @@ contract InkLiquidity is Ownable, IERC721Receiver {
         if (poolSet) revert PoolAlreadySet();
         Currency c = Currency.wrap(address(ink_));
         if (!(key.currency0 == c || key.currency1 == c)) revert NotInkPool();
+        (uint160 sqrtPriceX96, int24 tick,,) = poolManager.getSlot0(key.toId());
+        if (sqrtPriceX96 == 0) revert PoolNotInitialized();
         poolKey = key;
         ink = ink_;
         poolSet = true;
-        (, floorTick,,) = poolManager.getSlot0(key.toId());
+        floorTick = tick;
         emit PoolSet(key.toId(), address(ink_));
     }
 
@@ -235,7 +241,10 @@ contract InkLiquidity is Ownable, IERC721Receiver {
         }
     }
 
-    function _mintSingleSided(int24 lower, int24 upper, uint256 amount) internal returns (uint256 positionId) {
+    function _mintSingleSided(int24 lower, int24 upper, uint256 amount)
+        internal
+        returns (uint256 positionId)
+    {
         bool inkIs0 = _inkIs0();
         uint128 liq = inkIs0
             ? LiquidityAmounts.getLiquidityForAmount0(
@@ -262,7 +271,10 @@ contract InkLiquidity is Ownable, IERC721Receiver {
         params[1] = abi.encode(Currency.wrap(address(ink)), ActionConstants.OPEN_DELTA, false);
         params[2] = abi.encode(Currency.wrap(address(ink)), address(this));
         positionManager.modifyLiquidities(
-            abi.encode(abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE), uint8(Actions.SWEEP)), params),
+            abi.encode(
+                abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE), uint8(Actions.SWEEP)),
+                params
+            ),
             block.timestamp
         );
     }

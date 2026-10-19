@@ -4,7 +4,7 @@ pragma solidity 0.8.26;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
-import {InkPortraits, IInkRenderer} from "./InkPortraits.sol";
+import {InkPortraits, IInkRenderer, IInkTraitRerolls} from "./InkPortraits.sol";
 
 /// @title Ink & Inference renderer
 /// @notice Stores the owner's art script on-chain and builds every token's metadata:
@@ -113,19 +113,32 @@ contract InkRenderer is IInkRenderer, Ownable {
             l = agentLabels(tokenId, s);
             name = string.concat("Agent Portrait #", _padded(tokenId));
             params = string.concat(
-                '{"mode":"agent","seat":', tokenId.toString(),
-                ',"accepted":', uint256(s.accepted).toString(),
-                ',"rate":', _decimal(s.rateBps, 2),
-                ',"turns":', uint256(s.turns).toString(),
-                ',"hours":', _decimal(s.hoursTenths, 1),
-                ',"outdated":', s.outdated ? "true" : "false", "}"
+                '{"mode":"agent","seat":',
+                tokenId.toString(),
+                ',"accepted":',
+                uint256(s.accepted).toString(),
+                ',"rate":',
+                _decimal(s.rateBps, 2),
+                ',"turns":',
+                uint256(s.turns).toString(),
+                ',"hours":',
+                _decimal(s.hoursTenths, 1),
+                ',"outdated":',
+                s.outdated ? "true" : "false",
+                "}"
             );
             extra = string.concat(
-                ',{"trait_type":"Seat","value":"#', tokenId.toString(),
-                '"},{"trait_type":"Accepted","display_type":"number","value":', uint256(s.accepted).toString(),
-                '},{"trait_type":"Acceptance","value":"', ((uint256(s.rateBps) + 50) / 100).toString(),
-                '%"},{"trait_type":"Turns","display_type":"number","value":', uint256(s.turns).toString(),
-                '},{"trait_type":"Hours","value":"', _decimal(s.hoursTenths, 1), '"}'
+                ',{"trait_type":"Seat","value":"#',
+                tokenId.toString(),
+                '"},{"trait_type":"Accepted","display_type":"number","value":',
+                uint256(s.accepted).toString(),
+                '},{"trait_type":"Acceptance","value":"',
+                ((uint256(s.rateBps) + 50) / 100).toString(),
+                '%"},{"trait_type":"Turns","display_type":"number","value":',
+                uint256(s.turns).toString(),
+                '},{"trait_type":"Hours","value":"',
+                _decimal(s.hoursTenths, 1),
+                '"}'
             );
         } else {
             string memory seed = Strings.toHexString(uint256(portraits.swarmSeed(tokenId)), 32);
@@ -135,13 +148,23 @@ contract InkRenderer is IInkRenderer, Ownable {
         }
 
         string memory attrs = string.concat(
-            '[{"trait_type":"Type","value":"', agent ? "Agent Portrait" : "Swarm Portrait",
-            '"},{"trait_type":"Scene","value":"', l.scene,
-            '"},{"trait_type":"Palette","value":"', l.palette,
-            '"},{"trait_type":"Glitch","value":"', l.glitch,
-            '"},{"trait_type":"Density","value":"', l.density,
-            '"},{"trait_type":"Depth","value":"', l.depth,
-            '"},{"trait_type":"Paper","value":"', l.paper, '"}', extra, "]"
+            '[{"trait_type":"Type","value":"',
+            agent ? "Agent Portrait" : "Swarm Portrait",
+            '"},{"trait_type":"Scene","value":"',
+            l.scene,
+            '"},{"trait_type":"Palette","value":"',
+            l.palette,
+            '"},{"trait_type":"Glitch","value":"',
+            l.glitch,
+            '"},{"trait_type":"Density","value":"',
+            l.density,
+            '"},{"trait_type":"Depth","value":"',
+            l.depth,
+            '"},{"trait_type":"Paper","value":"',
+            l.paper,
+            '"}',
+            extra,
+            "]"
         );
         string memory html = string.concat(
             "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -156,14 +179,29 @@ contract InkRenderer is IInkRenderer, Ownable {
             ? ""
             : string.concat('"image":"', previewBase, tokenId.toString(), '.png",');
         return string.concat(
-            '{"name":"', name,
+            '{"name":"',
+            name,
             '","description":"',
-            agent ? string.concat("Agent portrait of identity.md seat #", tokenId.toString(), ". ") : string.concat("Swarm portrait filling unclaimed seat #", portraits.swarmNumber(tokenId).toString(), ", pulled from the pool. "),
+            agent
+                ? string.concat("Agent portrait of identity.md seat #", tokenId.toString(), ". ")
+                : string.concat(
+                    "Swarm portrait filling unclaimed seat #",
+                    portraits.swarmNumber(tokenId).toString(),
+                    ", pulled from the pool. "
+                ),
             'The swarm, painted by its own work. Drawn live in your browser from code stored on Ethereum.",',
-            '"portrait_type":"', agent ? "agent" : "swarm", '",',
+            '"portrait_type":"',
+            agent ? "agent" : "swarm",
+            '",',
+            '"traitRerollBlock":',
+            agent ? "0" : uint256(IInkTraitRerolls(portraits.vault()).traitRerollBlock(tokenId)).toString(),
+            ",",
             image,
-            '"animation_url":"data:text/html;base64,', Base64.encode(bytes(html)),
-            '","attributes":', attrs, "}"
+            '"animation_url":"data:text/html;base64,',
+            Base64.encode(bytes(html)),
+            '","attributes":',
+            attrs,
+            "}"
         );
     }
 
@@ -173,11 +211,18 @@ contract InkRenderer is IInkRenderer, Ownable {
     /// Sketch below 25 accepted, Vortex from 2,500, Corridor from 15 hours; glitch 0.16 + (1 − rate) × 6
     /// is Clean from 97.67% and Weathered from 92.67%; density log10(turns+1)/log10(30000) is Sparse up to
     /// 60 turns and Dense up to 2,278; depth hours/60 is Shallow under 18 hours and Deep under 39.
-    function agentLabels(uint256 seat, InkPortraits.AgentStats memory s) public view returns (Labels memory l) {
+    function agentLabels(uint256 seat, InkPortraits.AgentStats memory s)
+        public
+        view
+        returns (Labels memory l)
+    {
         bool sketch = s.accepted < 25;
-        l.scene = sketch ? "Sketch" : s.accepted >= 2500 ? "Vortex" : s.hoursTenths >= 150 ? "Corridor" : "Glitch City";
+        l.scene = sketch
+            ? "Sketch"
+            : s.accepted >= 2500 ? "Vortex" : s.hoursTenths >= 150 ? "Corridor" : "Glitch City";
         l.palette = PALETTES[_fnv(abi.encodePacked("seat:", seat.toString(), ":palette")) % 6];
-        l.glitch = sketch ? "Clean" : s.rateBps >= 9767 ? "Clean" : s.rateBps >= 9267 ? "Weathered" : "Fractured";
+        l.glitch =
+            sketch ? "Clean" : s.rateBps >= 9767 ? "Clean" : s.rateBps >= 9267 ? "Weathered" : "Fractured";
         l.density = s.turns <= 60 ? "Sparse" : s.turns <= 2278 ? "Dense" : "Teeming";
         l.depth = s.hoursTenths < 180 ? "Shallow" : s.hoursTenths < 390 ? "Deep" : "Abyssal";
         l.paper = s.outdated ? "Weathered" : "Fresh";
@@ -192,9 +237,11 @@ contract InkRenderer is IInkRenderer, Ownable {
         (a, u) = _mulberry(a); // texture
         (a, u) = _mulberry(a); // scene
         uint256 x = uint256(u);
-        l.scene = x * 100 < 45 << 32 ? "Glitch City" : x * 100 < 75 << 32 ? "Corridor" : x * 100 < 90 << 32
-            ? "Vortex"
-            : x * 100 < 97 << 32 ? "Sketch" : "Line Study";
+        l.scene = x * 100 < 45 << 32
+            ? "Glitch City"
+            : x * 100 < 75 << 32
+                ? "Corridor"
+                : x * 100 < 90 << 32 ? "Vortex" : x * 100 < 97 << 32 ? "Sketch" : "Line Study";
         (a, u) = _mulberry(a); // structure
         (a, u) = _mulberry(a); // density = 0.4 + r × 0.6
         x = uint256(u);
@@ -204,7 +251,8 @@ contract InkRenderer is IInkRenderer, Ownable {
         l.depth = x * 10 < 3 << 32 ? "Shallow" : x * 20 < 13 << 32 ? "Deep" : "Abyssal";
         (a, u) = _mulberry(a); // glitch = 0.2 + r × 0.5
         x = uint256(u);
-        bool sketch = keccak256(bytes(l.scene)) == keccak256("Sketch") || keccak256(bytes(l.scene)) == keccak256("Line Study");
+        bool sketch = keccak256(bytes(l.scene)) == keccak256("Sketch")
+            || keccak256(bytes(l.scene)) == keccak256("Line Study");
         l.glitch = sketch || x * 5 < 1 << 32 ? "Clean" : x * 5 < 4 << 32 ? "Weathered" : "Fractured";
         l.palette = PALETTES[_fnv(abi.encodePacked(seedStr, ":palette")) % 6];
         l.paper = "Fresh";
@@ -248,7 +296,9 @@ contract InkRenderer is IInkRenderer, Ownable {
         uint256 len = f.length;
         while (len > 0 && f[len - 1] == "0") len--;
         bytes memory trimmed = new bytes(len);
-        for (uint256 i; i < len; i++) trimmed[i] = f[i];
+        for (uint256 i; i < len; i++) {
+            trimmed[i] = f[i];
+        }
         return string.concat(whole.toString(), ".", string(trimmed));
     }
 }

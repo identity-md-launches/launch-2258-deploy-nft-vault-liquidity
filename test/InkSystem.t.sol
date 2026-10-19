@@ -87,7 +87,9 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
 
     function _leaf(uint256 seat, InkPortraits.AgentStats memory s) internal pure returns (bytes32) {
         return keccak256(
-            bytes.concat(keccak256(abi.encode(seat, s.accepted, s.rateBps, s.turns, s.hoursTenths, s.outdated)))
+            bytes.concat(
+                keccak256(abi.encode(seat, s.accepted, s.rateBps, s.turns, s.hoursTenths, s.outdated))
+            )
         );
     }
 
@@ -116,7 +118,11 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
         posm = IPositionManager(
             address(
                 new PositionManager(
-                    manager, IAllowanceTransfer(deployPermit2()), 100_000, IPositionDescriptor(address(0)), IWETH9(address(0))
+                    manager,
+                    IAllowanceTransfer(deployPermit2()),
+                    100_000,
+                    IPositionDescriptor(address(0)),
+                    IWETH9(address(0))
                 )
             )
         );
@@ -163,10 +169,16 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
         manager.initialize(poolKey, TickMath.getSqrtPriceAtTick(openTick));
         (int24 lower, int24 upper) = inkIs0 ? (openTick, openTick + RANGE) : (openTick - RANGE, openTick);
         uint128 l = inkIs0
-            ? LiquidityAmounts.getLiquidityForAmount0(TickMath.getSqrtPriceAtTick(lower), TickMath.getSqrtPriceAtTick(upper), poolInk)
-            : LiquidityAmounts.getLiquidityForAmount1(TickMath.getSqrtPriceAtTick(lower), TickMath.getSqrtPriceAtTick(upper), poolInk);
+            ? LiquidityAmounts.getLiquidityForAmount0(
+                TickMath.getSqrtPriceAtTick(lower), TickMath.getSqrtPriceAtTick(upper), poolInk
+            )
+            : LiquidityAmounts.getLiquidityForAmount1(
+                TickMath.getSqrtPriceAtTick(lower), TickMath.getSqrtPriceAtTick(upper), poolInk
+            );
         ink.approve(address(modifyLiquidityRouter), type(uint256).max);
-        modifyLiquidityRouter.modifyLiquidity(poolKey, ModifyLiquidityParams(lower, upper, int256(uint256(l)), bytes32(0)), "");
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey, ModifyLiquidityParams(lower, upper, int256(uint256(l)), bytes32(0)), ""
+        );
 
         // 3. Owner wires INK in and opens the 24-hour claim window.
         leaves[0] = _leaf(280, statsA);
@@ -369,9 +381,15 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
         (int24 lower, int24 upper) = inkIs0 ? (openTick, openTick + RANGE) : (openTick - RANGE, openTick);
         ink.mint(address(this), 2_000_000e18);
         uint128 l = inkIs0
-            ? LiquidityAmounts.getLiquidityForAmount0(TickMath.getSqrtPriceAtTick(lower), TickMath.getSqrtPriceAtTick(upper), 1_000_000e18)
-            : LiquidityAmounts.getLiquidityForAmount1(TickMath.getSqrtPriceAtTick(lower), TickMath.getSqrtPriceAtTick(upper), 1_000_000e18);
-        modifyLiquidityRouter.modifyLiquidity(k, ModifyLiquidityParams(lower, upper, int256(uint256(l)), bytes32(0)), "");
+            ? LiquidityAmounts.getLiquidityForAmount0(
+                TickMath.getSqrtPriceAtTick(lower), TickMath.getSqrtPriceAtTick(upper), 1_000_000e18
+            )
+            : LiquidityAmounts.getLiquidityForAmount1(
+                TickMath.getSqrtPriceAtTick(lower), TickMath.getSqrtPriceAtTick(upper), 1_000_000e18
+            );
+        modifyLiquidityRouter.modifyLiquidity(
+            k, ModifyLiquidityParams(lower, upper, int256(uint256(l)), bytes32(0)), ""
+        );
         InkLiquidity l2 = new InkLiquidity(manager, posm, owner, treasury);
         vm.prank(owner);
         l2.setPool(k, IERC20(address(ink)));
@@ -380,7 +398,11 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
         ink.approve(address(swapRouter), type(uint256).max);
         swapRouter.swap(
             k,
-            SwapParams({zeroForOne: inkIs0, amountSpecified: -1e18, sqrtPriceLimitX96: inkIs0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1}),
+            SwapParams({
+                zeroForOne: inkIs0,
+                amountSpecified: -1e18,
+                sqrtPriceLimitX96: inkIs0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            }),
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
             ""
         );
@@ -392,6 +414,31 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
         (, PositionInfo info) = posm.getPoolAndPositionInfo(l2.positions(0));
         if (inkIs0) assertGe(info.tickLower(), openTick, "listed at or above the opening price");
         else assertLe(info.tickUpper(), openTick, "listed at or above the opening price");
+    }
+
+    /// Audit 80009a67: spot-based listing is observable, while the existing release floor still applies.
+    /// This reproduces caller-controlled timing; it makes no claim of a profitable round trip.
+    function test_permissionlessListingTracksSpotAboveReleaseFloor() public {
+        _release();
+        _buyInk(buyer, 50_000_000e18);
+        ink.mint(address(liq), liq.MIN_ADD());
+        vm.prank(other);
+        uint256 first = liq.addLiquidity();
+        (, PositionInfo beforeInfo) = posm.getPoolAndPositionInfo(first);
+
+        ink.mint(other, 200_000_000e18);
+        _swap(other, false, 10e18, false);
+        ink.mint(address(liq), liq.MIN_ADD());
+        vm.prank(other);
+        uint256 second = liq.addLiquidity();
+        (, PositionInfo afterInfo) = posm.getPoolAndPositionInfo(second);
+        if (inkIs0) {
+            assertLt(afterInfo.tickLower(), beforeInfo.tickLower(), "selling first lowers the next listing");
+            assertGe(afterInfo.tickLower(), liq.releaseStartTick(), "release floor still holds");
+        } else {
+            assertGt(afterInfo.tickUpper(), beforeInfo.tickUpper(), "selling first lowers the INK price");
+            assertLe(afterInfo.tickUpper(), liq.releaseStartTick(), "release floor still holds");
+        }
     }
 
     // ---------------------------------------------------------------- 24-hour agent claims
@@ -462,7 +509,11 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
         uint256 toPool = vault.release();
         assertEq(toPool, 1999 * PORTRAIT, "every unclaimed seat's INK goes to the pool");
         assertEq(vault.swarmSlots(), 1999, "and becomes a swarm slot");
-        assertEq(liq.positionCount(), liq.LADDER_BANDS(), "added to the pool in the same transaction, as the ladder");
+        assertEq(
+            liq.positionCount(),
+            liq.LADDER_BANDS(),
+            "added to the pool in the same transaction, as the ladder"
+        );
         assertLt(ink.balanceOf(address(liq)), 1e6);
         assertEq(ERC721(address(posm)).ownerOf(liq.positions(0)), address(liq), "and it stays there");
         assertEq(ink.balanceOf(address(vault)), PORTRAIT, "only the claimed portrait's backing is left");
@@ -639,7 +690,9 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
         assertEq(vault.waitingCount(), 1);
 
         // Pretend every swarm slot is already minted, so the only possible pick is seat 280's portrait.
-        vm.mockCall(address(portraits), abi.encodeWithSignature("swarmMinted()"), abi.encode(vault.swarmSlots()));
+        vm.mockCall(
+            address(portraits), abi.encodeWithSignature("swarmMinted()"), abi.encode(vault.swarmSlots())
+        );
         _buyInk(buyer, PORTRAIT);
         vm.startPrank(buyer);
         ink.approve(address(vault), PORTRAIT);
@@ -799,7 +852,9 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
         }
         // Hand-backs in bulk.
         uint256[] memory ids = new uint256[](100);
-        for (uint256 i; i < 100; i++) ids[i] = 10_000 + i;
+        for (uint256 i; i < 100; i++) {
+            ids[i] = 10_000 + i;
+        }
         vm.startPrank(whale);
         portraits.setApprovalForAll(address(vault), true);
         uint256 g2 = gasleft();
@@ -812,9 +867,23 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
     function test_guards() public {
         // InkHook constructor and callbacks
         vm.expectRevert(InkHook.ZeroAddress.selector);
-        new InkHook(manager, IAgentPortraits(address(portraits)), IInkVault(address(vault)), Currency.wrap(address(imd)), address(0), 25);
+        new InkHook(
+            manager,
+            IAgentPortraits(address(portraits)),
+            IInkVault(address(vault)),
+            Currency.wrap(address(imd)),
+            address(0),
+            25
+        );
         vm.expectRevert(InkHook.FeeTooHigh.selector);
-        new InkHook(manager, IAgentPortraits(address(portraits)), IInkVault(address(vault)), Currency.wrap(address(imd)), treasury, 101);
+        new InkHook(
+            manager,
+            IAgentPortraits(address(portraits)),
+            IInkVault(address(vault)),
+            Currency.wrap(address(imd)),
+            treasury,
+            101
+        );
         vm.expectRevert(InkHook.NotPoolManager.selector);
         hook.beforeInitialize(address(this), poolKey, 0);
         vm.expectRevert(InkHook.NotPoolManager.selector);
@@ -858,7 +927,10 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
         vm.expectRevert(InkPortraits.Locked.selector);
         portraits.setRenderer(other);
         vm.stopPrank();
-        assertTrue(portraits.supportsInterface(0x49064906) && portraits.supportsInterface(0x2a55205a), "ERC-4906 + ERC-2981");
+        assertTrue(
+            portraits.supportsInterface(0x49064906) && portraits.supportsInterface(0x2a55205a),
+            "ERC-4906 + ERC-2981"
+        );
 
         // InkRenderer
         bytes memory big = new bytes(r.MAX_CHUNK() + 1);
@@ -893,7 +965,9 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
         vm.expectRevert(InkVault.UnknownPull.selector);
         vault.reveal(0);
         assertEq(vault.inventorySize(), 0);
-        assertEq(vault.onERC721Received(address(0), address(0), 0, ""), vault.onERC721Received.selector);
+        // Audit b0a5b130: direct safe transfers bypass deposit accounting and must be refused.
+        vm.expectRevert(InkVault.UseDeposit.selector);
+        vault.onERC721Received(address(0), address(0), 0, "");
         assertEq(liq.onERC721Received(address(0), address(0), 0, ""), liq.onERC721Received.selector);
 
         // A swap too small to owe any hook fee still goes through, fee-free.
@@ -1012,7 +1086,8 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
     /// the treasury, INK to InkLiquidity, which lists it once it has a portrait's worth.
     function test_feeRouterSplitsAndCompounds() public {
         _release();
-        InkFeeRouter router = new InkFeeRouter(IInkLiquidityFees(address(liq)), IERC20(address(imd)), treasury);
+        InkFeeRouter router =
+            new InkFeeRouter(IInkLiquidityFees(address(liq)), IERC20(address(imd)), treasury);
         uint256 positionsBefore = liq.positionCount();
         uint256 treasuryBefore = imd.balanceOf(treasury);
         uint256 liqInk = ink.balanceOf(address(liq));
@@ -1047,7 +1122,8 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
     /// After the manager hands the requester share to the router, one permissionless call claims and routes it.
     function test_feeRouterClaimAndRoute() public {
         _release();
-        InkFeeRouter router = new InkFeeRouter(IInkLiquidityFees(address(liq)), IERC20(address(imd)), treasury);
+        InkFeeRouter router =
+            new InkFeeRouter(IInkLiquidityFees(address(liq)), IERC20(address(imd)), treasury);
         MockLaunchFactory factory = new MockLaunchFactory(address(router));
         ink.mint(address(factory), 500_000e18);
         imd.mint(address(factory), 12e18);
@@ -1057,7 +1133,8 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
         uint256 positionsBefore = liq.positionCount();
 
         vm.prank(other);
-        (uint256 imdOut, uint256 inkOut, uint256 positionId) = router.claimAndRoute(ILaunchFeeFactory(address(factory)), 7);
+        (uint256 imdOut, uint256 inkOut, uint256 positionId) =
+            router.claimAndRoute(ILaunchFeeFactory(address(factory)), 7);
         assertEq(imdOut, 12e18);
         assertEq(inkOut, 500_000e18);
         assertEq(imd.balanceOf(treasury) - treasuryBefore, 12e18);
@@ -1121,11 +1198,17 @@ contract InkSystemTest is Test, Deployers, DeployPermit2 {
                 prevEdge = lo;
             }
             uint128 l = posm.getPositionLiquidity(id);
-            if (k > 0) assertApproxEqRel(uint256(l), uint256(prevLiq) * 2, 1e15, "twice as deep as the band below");
+            if (k > 0) {
+                assertApproxEqRel(uint256(l), uint256(prevLiq) * 2, 1e15, "twice as deep as the band below");
+            }
             prevLiq = l;
             listed += inkIs0
-                ? SqrtPriceMath.getAmount0Delta(TickMath.getSqrtPriceAtTick(lo), TickMath.getSqrtPriceAtTick(hi), l, false)
-                : SqrtPriceMath.getAmount1Delta(TickMath.getSqrtPriceAtTick(lo), TickMath.getSqrtPriceAtTick(hi), l, false);
+                ? SqrtPriceMath.getAmount0Delta(
+                    TickMath.getSqrtPriceAtTick(lo), TickMath.getSqrtPriceAtTick(hi), l, false
+                )
+                : SqrtPriceMath.getAmount1Delta(
+                    TickMath.getSqrtPriceAtTick(lo), TickMath.getSqrtPriceAtTick(hi), l, false
+                );
         }
         assertApproxEqRel(listed, 2000 * PORTRAIT, 1e12, "all the unclaimed INK is listed");
         assertLt(ink.balanceOf(address(liq)), 1e15, "only rounding dust left behind");

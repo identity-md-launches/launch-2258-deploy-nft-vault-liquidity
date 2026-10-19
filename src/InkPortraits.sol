@@ -9,6 +9,10 @@ interface IInkRenderer {
     function tokenURI(uint256 tokenId) external view returns (string memory);
 }
 
+interface IInkTraitRerolls {
+    function traitRerollBlock(uint256 tokenId) external view returns (uint64);
+}
+
 /// @title Ink & Inference portraits
 /// @notice A static, one-time drop of at most 2,000 portraits. Only the vault mints.
 /// - Agent portraits: token id = seat number (0–1999), painted from that agent's work record.
@@ -63,6 +67,7 @@ contract InkPortraits is ERC721, ERC2981, Ownable {
     error Locked();
     error NoRenderer();
     error SwarmStarted();
+    error RerollPending();
 
     constructor(address owner_) ERC721("Ink & Inference", "INKINF") Ownable(owner_) {
         _setDefaultRoyalty(owner_, ROYALTY_BPS);
@@ -162,7 +167,7 @@ contract InkPortraits is ERC721, ERC2981, Ownable {
                 k -= free;
                 continue;
             }
-            for (uint256 b; ; b++) {
+            for (uint256 b;; b++) {
                 if (open & (1 << b) != 0) {
                     if (k == 0) return w * 256 + b;
                     k--;
@@ -197,6 +202,12 @@ contract InkPortraits is ERC721, ERC2981, Ownable {
     }
 
     function _update(address to, uint256 tokenId, address auth) internal override returns (address from) {
+        // A buyer must receive the traits offered for sale. Only the holder can request a reroll and
+        // anyone can finish it; there is no owner-controlled transfer lock. Minting needs no vault call.
+        if (
+            _ownerOf(tokenId) != address(0) && !isAgentPortrait(tokenId)
+                && IInkTraitRerolls(vault).traitRerollBlock(tokenId) != 0
+        ) revert RerollPending();
         from = super._update(to, tokenId, auth);
         if (isAgentPortrait(tokenId)) {
             if (from != address(0)) agentBalanceOf[from]--;
